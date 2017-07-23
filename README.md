@@ -29,3 +29,12 @@ Multiple loads: Will be setting up multiple load connections, also these will ha
 
 Draw minimization: the system is quite power hungry for now, soon it will be set to minimize needed power by turning of screen, leds, reviewing the MCU clock and using sleep states. Goal is less than half a mA. User panel: The system will be controlled and monitored through a UI, this will include the oled, which will be activated by a button and have a timer. there will also be buttons for activating the loads and status of all these.
 
+
+UPDATE:
+I have build the test circuit on some veroboard and made a half assed layout in fritzing... its not the best tool so it's not even complete but i think all the components are there atleast. 
+Also had a go at minimizing current draw, now it's at 1.5 mA in idle so that's not half bad. could be improved with more sleep cycles but i think that'll do for now, for any more usable size solar panel it's negible. 
+There is now also a timer class, a button class and a load class. I think for the timer and load i'll probably break these out into their own libs as i would like to have them accessible, there are probably alot of those already floating around but for me they are/feel very easy to use and include. 
+
+So i guess for now, the software is pretty much done. i could have some sort of meny system or such, setting timeouts and using the eeprom. More than any other thing i would like to enable the watchdog though, and also the current software needs more testing. 
+Apart from enabling the watchdog all changes also require more hardware so that will probably be a while. For now i'll first look into the batteries and getting a bigger solar panel.
+
