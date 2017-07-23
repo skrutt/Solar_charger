@@ -20,7 +20,6 @@ SSD1306_text display;
 #endif
 
 
-#define SCREEN_UPDATE_MS 350
 
 #define BATTERY_VOLTAGE_CHANNEL 0
 
@@ -28,62 +27,195 @@ SSD1306_text display;
 #define CHARGE_START  3.95
 #define CHARGE_STOP   4.05
 
-#define CHARGE_PIN    9
+#define CHARGE_PIN    3
 
 
 //Load defines, give loads a struct/class later
 //#define LOAD_ALLOW  3.75
 //#define LOAD_STOP   3.5
 #define LOAD_ALLOW  3.8
-#define LOAD_STOP   3.65
+#define LOAD_STOP   3.6
 
-#define LOAD1_PIN    10
+#define LOAD1_PIN    9
+#define LOAD1_BUTTON_PIN    8   //button
+//Define as long because compiler for some reason gets the wrong datatype
+#define LOAD_ENABLE_TIME 1000L * 60L * 60L * 2L
 
-#define LOAD1_ENABLE_PIN    6
-#define SCREEN_POWER_PIN    7
-#define SCREEN_ENABLE_PIN    8
+#define SCREEN_UPDATE_MS 350
+#define SCREEN_TIMEOUT_MS 15000
+#define SCREEN_POWER_PIN    2
+#define SCREEN_BUTTON_PIN    7    //button
 
 #define BUTTON_DEBOUNCE_MS 200
 
+
+ // static bool screen_enable = 1;
+
+  static bool charge_enabled = 0;
+  
+  const float res_divisor = 2.16 / (2.16 + 11.78);
+  static float volt = 0.7;
+  static float batt_volt = volt/ res_divisor;
+
+//timeout class
+class timeout_c
+{
+  public:
+  timeout_c(const uint32_t timeout_val):
+  timeout(timeout_val)
+  {
+    clear();
+  }
+
+  bool check()
+  {    
+    if(!last_time || time_passed() > timeout)  //check if timed out yet, or not started
+    {
+        return 1;  
+    }
+    return 0;
+  }
+  bool check_n_reset()
+  {
+    bool ret = check();
+    
+    if(ret)  //if timed out, restart
+        reset();  
+    return ret;
+  }
+  void reset()
+  {
+        last_time = trueMillis();
+  }
+  void clear()
+  {
+    last_time = 0;
+  }
+  uint32_t time_passed()
+  {
+    uint32_t current_time = trueMillis();
+    return current_time - last_time;
+  }
+  uint32_t timeLeft()
+  {
+    uint32_t time_passed_int = time_passed();
+    if(!last_time || time_passed_int >= timeout)
+      return 0;
+    return timeout - time_passed_int;
+  }
+  
+  private:
+  uint32_t timeout;
+  uint32_t last_time; 
+  
+};
+
+//button class/ lib?
 class button_type_c
 {
   public:
   button_type_c(uint8_t button_no):
-  button_no(button_no)
+  button_no(button_no),
+  timer(BUTTON_DEBOUNCE_MS)
   {
-    last_time = 0;
     last_state = 0;
     pinMode(button_no, INPUT_PULLUP);
   }
 
   bool readButton()
   {
-    uint32_t current_time = trueMillis();
     bool ret = 0;
     
-    if((current_time - last_time) > BUTTON_DEBOUNCE_MS)
+    if(timer.check())
     {
       bool current_state = !digitalRead(button_no);   //active low
       
       if(current_state && !last_state)  //if active and last state was inactive 
       {
-        last_time = current_time;
+        timer.reset();
         ret = 1;
       }                                 //Here we could add button repeating
       last_state = current_state; //Save last state
     }
     return ret;
   }
+  
   private:
   bool last_state;
   uint8_t button_no;
-  uint32_t last_time;   //todo, init func to set up pin and struct, read func
+  timeout_c timer;  //timer used for debounce 
+  //todo, init func to set up pin and struct, read func
   
-} ;
+};
 
+//load class/ lib?
+class load_type_c
+{
+  public:
+  //Constructor
+  load_type_c(uint8_t output_no, uint8_t button):
+  enable_button(button),
+  output_no(output_no),
+  timer(LOAD_ENABLE_TIME)
+  {
+      digitalWrite(output_no, LOW);
+      pinMode(output_no, OUTPUT); 
+  }
 
-button_type_c load1_enable_button(LOAD1_ENABLE_PIN);
-button_type_c screen_enable_button(SCREEN_ENABLE_PIN);
+  bool isEnabled()
+  {
+      return !timer.check();
+  }
+  uint32_t timeLeft()
+  {
+    return timer.timeLeft();
+  }
+  bool check()
+  {
+
+      if(batt_volt < LOAD_STOP) //First, check for low power
+      {
+        disable();
+      }
+      else 
+      {
+          //if load button pressed
+          if(enable_button.readButton()) 
+          {
+              if(isEnabled())  //Turn off if on
+              {
+                disable();
+              }
+              else if(batt_volt > LOAD_ALLOW) //turn on if allowed and off
+              {
+                enable();
+              }
+          }
+
+          if(!isEnabled())  //if timer is active, activate load
+                disable();
+      }
+  }
+  private:
+  void disable()
+  {
+      digitalWrite(output_no, LOW);
+      timer.clear();    //stop timer
+  }  
+  void enable()
+  {
+      digitalWrite(output_no, HIGH);
+      timer.reset();
+  }
+  
+  button_type_c enable_button;
+  uint8_t output_no;
+  timeout_c timer;  //timer used for time out 
+  
+};
+
+load_type_c   load1(LOAD1_PIN, LOAD1_BUTTON_PIN);
+button_type_c screen_enable_button(SCREEN_BUTTON_PIN);
 
 
 
@@ -153,33 +285,36 @@ void screen_draw()
     
     display.init();       
 
-    display.clear();
-    display.setCursor(0,0);
     
     display.setTextSize(2);
-    display.println("   SOLAR");
-    display.println("   AW");
-    display.println("   YEA");
+    display.setCursor(0,3 * 12);
+    display.print("SOLAR");
+    display.setCursor(3,3 * 12);
+    display.print("AW");
+    display.setCursor(6,3 * 12);
+    display.print("YEA");
   
-    trueDelay(1500);
+    trueDelay(800);
 
     display.setTextSize(1);
 
      // text display tests
     display.setCursor(0,0);
-    display.println("   Solar test v0.1");
-    display.println("                   ");
-    display.println("Charge:     Load:    "); 
-    display.println("                   ");
+    display.println("   Solar test v0.1    ");
+    display.println("                      ");
+    display.println("Charge:     Load:     "); 
+    display.println("                      ");
   
     //Debug
     //display.print("Raw ADC: ");
     //display.println(test);
     
-    display.println("Treated val:       V");
-    display.println("Battery:           V"); 
-    display.println("                   ");
-    display.println("Debug count:");
+  //  display.println("Treated val:       V  ");
+    display.println("                      ");
+    
+    display.println("Battery:           V  "); 
+    display.println("                      ");
+    display.println("Debug count:          ");
     
     power_twi_disable();
     
@@ -187,33 +322,21 @@ void screen_draw()
     ADCSRA |= (1 << ADEN);
 }
 
-  static bool screen_enable = 1;
-
-  static bool charge_enabled = 0;
-  static bool load_enabled = 0;
-  
-  const float res_divisor = 2.16 / (2.16 + 11.78);
-  static float volt = 0.7;
-  static float batt_volt = volt/ res_divisor;
-
 void screen_update()
 {
   //Debug counter
   static uint32_t i = 0 ;
   i++;
   
-  static unsigned long last_time = 0;
-  unsigned long current_time = trueMillis();
+  static timeout_c timer(SCREEN_UPDATE_MS);
 
   //Time to update screen
-  if(((current_time - last_time) > SCREEN_UPDATE_MS) && screen_enable)
+  if(timer.check_n_reset())
   {
     //Check disabling adc & wire later
     ADCSRA &= ~(1 << ADEN);
     power_adc_disable();
     power_twi_enable();
-    
-    last_time = current_time;
     
     display.setCursor(2, 8 * 6);
     if(charge_enabled)
@@ -222,22 +345,35 @@ void screen_update()
       display.print("OFF");
     
     display.setCursor(2, 17 * 6);
-    if(load_enabled)
+    if(load1.isEnabled())
+    {
+      
       display.print("ON "); 
+    }
     else
       display.print("OFF");
-  
+
+  //Load time
+    display.setCursor(3, 12 * 6 -2);
+    int timeleft_s = load1.timeLeft() / 1000;
+    int timeleft_m = timeleft_s / 60;
+    timeleft_s %= 60;
+    
+    display.print(timeleft_m);
+    display.print(':');
+    display.print(timeleft_s,10);
+    display.print("    ");
   
     //Debug
     //display.print("Raw ADC: ");
     //display.println(test);
 
     //threated volt
-    display.setCursor(4,13 * 6);
-    display.print(volt, 3);
+    //display.setCursor(4, 13 * 6);
+    //display.print(volt, 3);
 
     //battery volt
-    display.setCursor(5,13 *6);
+    display.setCursor(5, 13 * 6);
     display.print(batt_volt, 3);
   
     //debug counter
@@ -255,6 +391,9 @@ void setup()
 {                
 //  Serial.begin(9600);
 
+  //Charge pin
+  charge_off(); 
+
   setClockPrescaler(CLOCK_PRESCALER_16);    //Set 1 Mhz operation. Look into adc prescaler later
 
 
@@ -268,9 +407,6 @@ void setup()
   //power_timer0_disable(); 
   power_spi_disable();
   power_usart0_disable();
- 
-  
-  screen_draw();
 
   // init done
 
@@ -280,20 +416,13 @@ void setup()
 
   //REFSx 11 means internal 1.1 vref
   ADMUX = (1 << REFS1) | (1 << REFS0) | (0 << ADLAR) | (0x07 & BATTERY_VOLTAGE_CHANNEL); 
-
-  //Load pins
-  digitalWrite(LOAD1_PIN, LOW);
-  pinMode(LOAD1_PIN, OUTPUT);
     
-
-  //Charge pin
-  charge_off(); 
 
 }
 
 
-void loop() {
-
+void loop() 
+{
 
  // int test = analogRead(BATTERY_VOLTAGE_CHANNEL);
   int test = rawAnalogReadWithSleep();  //ADC should be set up for channel 0 now
@@ -310,7 +439,8 @@ void loop() {
   //resistor2 high side 11.78 kohm
 
 
-  //CHARGE
+  // ***************** CHARGE ************************
+  
   if(batt_volt > CHARGE_STOP)
   {
     charge_off();
@@ -322,40 +452,32 @@ void loop() {
     charge_enabled = 1;
   }
   
-  //LOAD
-  if(batt_volt < LOAD_STOP)
-  {
-    digitalWrite(LOAD1_PIN, LOW);
-    load_enabled = 0;
-  }
-  else if(load1_enable_button.readButton()) //if load toggle pressed
-  {
-    if(load_enabled)  //Turn off if on
-    {
-      digitalWrite(LOAD1_PIN, LOW);
-      load_enabled = 0;
-    }
-    else if(batt_volt > LOAD_ALLOW) //turn on if allowed and off
-    {
-      digitalWrite(LOAD1_PIN, HIGH);
-      load_enabled = 1;
-    }
-  }
+  // ***************** LOAD **************************
+ 
+  load1.check();
+  
+  // ***************** SCREEN ************************
+  
+  static timeout_c screen_timer(SCREEN_TIMEOUT_MS);
 
-  //SCREEN
-
+  //screen toggle
   if(screen_enable_button.readButton())
   {
-    screen_enable = !screen_enable; //toggle
-    if(screen_enable)
+    if(screen_timer.check()) //check if we need to redraw screen
     {
       screen_draw();
-    }else{
-      digitalWrite(SCREEN_POWER_PIN, HIGH);
     }
+    screen_timer.reset();
   }
 
-  screen_update();
+  //screen update
+  if(!screen_timer.check())
+  {
+      screen_update();  
+  }else{
+      digitalWrite(SCREEN_POWER_PIN, HIGH);
+  }
+
  
 }
 
